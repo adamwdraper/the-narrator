@@ -1,4 +1,5 @@
 import pytest
+import pytest_asyncio
 import os
 from pathlib import Path
 import tempfile
@@ -14,10 +15,9 @@ pytest_plugins = ('pytest_asyncio',)
 @pytest.fixture
 def env_vars():
     """Save and restore environment variables."""
-    # This fixture is no longer needed but kept for backward compatibility
     yield
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def thread_store():
     """Create a ThreadStore for testing using SQLBackend with an in-memory DB."""
     # Use factory pattern for immediate initialization
@@ -86,7 +86,7 @@ async def test_factory_pattern():
 @pytest.mark.asyncio
 async def test_auto_initialization():
     """Test that ThreadStore initializes automatically when operations are performed."""
-    # Create store without explicitly initializing (backward compatibility pattern)
+    # Create store without explicitly initializing
     store = ThreadStore(":memory:")
     
     # Verify not initialized yet

@@ -27,8 +27,7 @@ class ThreadStore:
         # Or for in-memory storage:
         store = await ThreadStore.create()  # Uses memory backend
         
-        # For backward compatibility, you can also use the direct constructor
-        # which will connect on first operation:
+        # Direct constructor (connects on first operation):
         store = ThreadStore("postgresql+asyncpg://user:pass@localhost/dbname")
         
     Connection pooling settings can be configured via environment variables:

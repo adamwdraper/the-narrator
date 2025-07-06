@@ -148,19 +148,18 @@ class FileStore:
                  allowed_mime_types: Optional[Set[str]] = None, max_storage_size: Optional[int] = None):
         """Initialize file store
         
-        For production use, prefer the async factory method:
-        `store = await FileStore.create(base_path, ...)`
-        
         Args:
             base_path: Base directory for file storage. If not provided,
-                              uses NARRATOR_FILE_STORAGE_PATH env var or defaults to
-        ~/.narrator/files
+                      uses NARRATOR_FILE_STORAGE_PATH env var or defaults to ~/.narrator/files
             max_file_size: Maximum allowed file size in bytes. If not provided,
                           uses NARRATOR_MAX_FILE_SIZE env var or defaults to 50MB
             allowed_mime_types: Set of allowed MIME types
             max_storage_size: Maximum total storage size in bytes. If not provided,
                             uses NARRATOR_MAX_STORAGE_SIZE env var or defaults to 5GB
         """
+        # Set storage backend type
+        self.storage_backend = "local"
+        
         # Get max file size from env var or default
         env_max_file_size = os.getenv('NARRATOR_MAX_FILE_SIZE')
         if max_file_size is not None:
@@ -371,7 +370,12 @@ class FileStore:
         return file_path.read_bytes()
     
     async def delete(self, file_id: str, storage_path: Optional[str] = None) -> None:
-        """Delete file from storage"""
+        """Delete file from storage
+        
+        Args:
+            file_id: The unique file identifier
+            storage_path: Optional storage path from metadata (preferred if available)
+        """
         if storage_path:
             # Use the exact path from metadata if available
             file_path = self.base_path / storage_path
@@ -400,8 +404,12 @@ class FileStore:
         return total
 
     async def get_file_count(self) -> int:
-        """Get total number of files"""
-        return len(list(self.base_path.rglob('*')))
+        """Get total number of files (excluding directories)"""
+        count = 0
+        for path in self.base_path.rglob('*'):
+            if path.is_file():
+                count += 1
+        return count
 
     async def check_health(self) -> Dict[str, Any]:
         """Check storage health and return metrics"""

@@ -210,20 +210,16 @@ class SQLBackend(StorageBackend):
                        f"recycle={pool_recycle}")
             
         self.engine = create_async_engine(self.database_url, **engine_kwargs)
-        # Create session_maker even though we don't use it directly in our implementation,
-        # to support backward compatibility with tests
+        # Create session_maker for database operations
         self._session_maker = sessionmaker(self.engine, class_=AsyncSession, expire_on_commit=False)
         
     @property
     def async_session(self):
         """
-        Provides backward compatibility with tests that directly access backend.async_session
-        
         Returns the session factory for creating new database sessions.
         
-        NOTE: This is kept for backward compatibility with existing tests but should 
-        not be used in new code. Use _get_session() method instead which properly
-        creates a session for each database operation.
+        Use _get_session() method instead which properly creates a session 
+        for each database operation.
         """
         return self._session_maker
 
@@ -376,8 +372,7 @@ class SQLBackend(StorageBackend):
                     await session.commit()
                     logger.info(f"Thread {thread.id} successfully committed to database.")
                 except Exception as e:
-                    # For test compatibility - convert database errors to RuntimeError
-                    # This helps maintain backward compatibility with tests expecting RuntimeError
+                    # Convert database errors to RuntimeError for consistent error handling
                     logger.error(f"Database error during commit: {str(e)}")
                     raise RuntimeError(f"Failed to save thread: Database error - {str(e)}") from e
                 return thread

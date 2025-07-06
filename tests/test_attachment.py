@@ -73,22 +73,14 @@ def test_attachment_serialization(sample_attachment):
     assert data["storage_path"] == "/path/to/file.txt"
     assert data["storage_backend"] == "local"
     assert data["attributes"]["type"] == "text"
-    assert "content" not in data  # Content should not be included when file_id exists
-    
-    # Add content and test serialization
-    sample_attachment.content = b"Test content"
-    sample_attachment.file_id = None  # Clear file_id to test content serialization
-    data = sample_attachment.model_dump()
-    assert "content" in data
-    assert isinstance(data["content"], str)  # Should be base64 string
-    assert base64.b64decode(data["content"]) == b"Test content"
+    assert "content" not in data  # Content is never included in model_dump
     
     # Test model_validate()
     new_attachment = Attachment.model_validate(data)
     assert new_attachment.filename == sample_attachment.filename
     assert new_attachment.mime_type == sample_attachment.mime_type
     assert new_attachment.attributes == sample_attachment.attributes
-    assert isinstance(new_attachment.content, str)  # Should remain as base64 string
+    assert new_attachment.content is None  # Content not included in serialization
 
 @pytest.mark.asyncio
 async def test_get_content_bytes():
@@ -133,7 +125,7 @@ async def test_get_content_bytes():
     
     content = await attachment.get_content_bytes(file_store=mock_store)
     assert content == b"Stored content"
-    mock_store.get.assert_called_once_with("test-file", storage_path="/path/to/file.txt")
+    mock_store.get.assert_called_once_with("test-file", "/path/to/file.txt")
 
 @pytest.mark.asyncio
 async def test_ensure_stored():
@@ -226,32 +218,40 @@ def test_attachment_with_processed_content():
     assert json_attachment.attributes["parsed_content"] == {"key": "value"}
 
 def test_attachment_content_serialization():
-    """Test content serialization in model_dump."""
+    """Test attachment serialization behavior."""
     content = b"Test content for serialization"
     attachment = Attachment(
         filename="test.txt",
         content=content
     )
     
-    # Test model_dump serialization
+    # Test model_dump serialization - content is never included
     data = attachment.model_dump()
-    assert "content" in data
-    assert isinstance(data["content"], str)  # Should be base64 string
-    assert base64.b64decode(data["content"]) == content
+    assert "content" not in data
+    assert data["filename"] == "test.txt"
+    assert data["file_id"] is None
 
-def test_attachment_base64():
-    """Test attachment base64 encoding/decoding."""
+@pytest.mark.asyncio
+async def test_attachment_base64():
+    """Test attachment with base64 content."""
     content = b"Test content for base64"
     attachment = Attachment(
-        id="test-attachment",
         filename="test.txt",
         content=content,
         mime_type="text/plain"
     )
-
-    # Test base64 encoding
-    b64 = base64.b64encode(content).decode('utf-8')
-    assert attachment.model_dump()["content"] == b64
+    
+    # Test that attachment can handle base64 content
+    b64_content = base64.b64encode(content).decode('utf-8')
+    b64_attachment = Attachment(
+        filename="test.txt",
+        content=b64_content,
+        mime_type="text/plain"
+    )
+    
+    # Both should be able to return the same bytes content
+    assert content == await attachment.get_content_bytes()
+    assert content == await b64_attachment.get_content_bytes()
 
 def test_attachment_size_calculation():
     """Test automatic size calculation."""

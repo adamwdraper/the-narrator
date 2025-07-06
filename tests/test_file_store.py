@@ -159,7 +159,7 @@ async def test_save_and_get(temp_store: FileStore):
 async def test_file_not_found(temp_store: FileStore):
     """Test handling of non-existent files."""
     with pytest.raises(FileNotFoundError):
-        await temp_store.get('nonexistent-id')
+        await temp_store.get('nonexistent-id', 'nonexistent/path.txt')
 
 @pytest.mark.asyncio
 async def test_delete(temp_store: FileStore):
@@ -252,10 +252,8 @@ async def test_storage_metrics(temp_store: FileStore):
     expected_size = len(content1) + len(content2)
     assert size == expected_size
     
-    # Count should include both files and their parent directories
-    # Each file is stored in a sharded directory structure: base_dir/xx/filename
-    # So for each file we have: the file itself and its parent directory
-    expected_count = 4  # 2 files + 2 parent directories
+    # Count should only include actual files (excluding directories)
+    expected_count = 2  # 2 files only
     assert count == expected_count
 
 @pytest.mark.asyncio

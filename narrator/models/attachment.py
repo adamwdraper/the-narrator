@@ -1,11 +1,12 @@
 from typing import Dict, Optional, Any, Union, Literal
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 import base64
 import io
 import magic
 from ..utils.logging import get_logger
 from pathlib import Path
 from ..storage.file_store import FileStore
+import hashlib
 
 # Get configured logger
 logger = get_logger(__name__)
@@ -21,6 +22,80 @@ class Attachment(BaseModel):
     storage_backend: Optional[str] = None  # Storage backend type
     status: Literal["pending", "stored", "failed"] = "pending"
 
+    @computed_field
+    @property
+    def id(self) -> str:
+        """Generate a unique ID based on content hash"""
+        if self.content is None:
+            # If no content, use filename and other attributes
+            hash_input = f"{self.filename}{self.mime_type or ''}"
+            return hashlib.sha256(hash_input.encode()).hexdigest()[:16]
+        
+        # Get content as bytes for hashing
+        if isinstance(self.content, bytes):
+            content_bytes = self.content
+        elif isinstance(self.content, str):
+            # Try to decode as base64 first
+            try:
+                content_bytes = base64.b64decode(self.content)
+            except:
+                # If not base64, encode as UTF-8
+                content_bytes = self.content.encode('utf-8')
+        else:
+            # Fallback to filename hash
+            return hashlib.sha256(self.filename.encode()).hexdigest()[:16]
+            
+        # Create hash of filename + content
+        hash_input = self.filename.encode() + content_bytes
+        return hashlib.sha256(hash_input).hexdigest()[:16]
+
+    @classmethod
+    def from_file_path(cls, file_path: Union[str, Path]) -> 'Attachment':
+        """Create an attachment from a file path"""
+        file_path = Path(file_path)
+        
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        
+        # Read file content
+        content = file_path.read_bytes()
+        
+        # Detect MIME type
+        mime_type = magic.from_buffer(content, mime=True)
+        
+        return cls(
+            filename=file_path.name,
+            content=content,
+            mime_type=mime_type
+        )
+
+    def detect_mime_type(self) -> None:
+        """Detect and set MIME type from content"""
+        if self.content is None:
+            logger.warning(f"Cannot detect MIME type for {self.filename}: no content")
+            return
+        
+        # Get content as bytes
+        if isinstance(self.content, bytes):
+            content_bytes = self.content
+        elif isinstance(self.content, str):
+            try:
+                content_bytes = base64.b64decode(self.content)
+            except:
+                content_bytes = self.content.encode('utf-8')
+        else:
+            logger.warning(f"Cannot detect MIME type for {self.filename}: invalid content type")
+            return
+        
+        # Detect MIME type
+        detected_mime_type = magic.from_buffer(content_bytes, mime=True)
+        
+        if not self.mime_type:
+            self.mime_type = detected_mime_type
+            logger.debug(f"Detected MIME type for {self.filename}: {self.mime_type}")
+        else:
+            logger.debug(f"MIME type already set for {self.filename}: {self.mime_type}")
+
     def model_dump(self, mode: str = "json") -> Dict[str, Any]:
         """Convert attachment to a dictionary suitable for JSON serialization
         
@@ -32,21 +107,13 @@ class Attachment(BaseModel):
         data = {
             "filename": self.filename,
             "mime_type": self.mime_type,
-            "attributes": self.attributes,  # Renamed from processed_content
+            "attributes": self.attributes,
             "file_id": self.file_id,
             "storage_path": self.storage_path,
             "storage_backend": self.storage_backend,
             "status": self.status
         }
         
-        # Only include content if no file_id (backwards compatibility)
-        if not self.file_id and self.content is not None:
-            # Convert bytes to base64 string for JSON serialization
-            if isinstance(self.content, bytes):
-                data["content"] = base64.b64encode(self.content).decode('utf-8')
-            else:
-                data["content"] = self.content
-                
         return data
         
     async def get_content_bytes(self, file_store: Optional[FileStore] = None) -> bytes:
@@ -56,8 +123,8 @@ class Attachment(BaseModel):
         Otherwise falls back to content field.
         
         Args:
-            file_store: Optional FileStore instance to use for retrieving file content.
-                       If not provided, the content must be available in the attachment.
+            file_store: FileStore instance to use for retrieving file content.
+                       Required when file_id is present.
         """
         logger.debug(f"Getting content bytes for {self.filename}")
         
@@ -65,7 +132,9 @@ class Attachment(BaseModel):
             logger.debug(f"Retrieving content from file store for file_id: {self.file_id}")
             if file_store is None:
                 raise ValueError("FileStore instance required to retrieve content for file_id")
-            return await file_store.get(self.file_id, storage_path=self.storage_path)
+            if self.storage_path is None:
+                raise ValueError("storage_path required to retrieve content for file_id")
+            return await file_store.get(self.file_id, self.storage_path)
             
         if isinstance(self.content, bytes):
             logger.debug(f"Content is already in bytes format for {self.filename}")
@@ -93,7 +162,7 @@ class Attachment(BaseModel):
                     return decoded
                 except:
                     logger.debug("Not base64, treating as UTF-8 text")
-                    # If not base64, try encoding as UTF-8
+                    # If not base64, encode as UTF-8
                     return self.content.encode('utf-8')
                 
         raise ValueError("No content available - attachment has neither file_id nor content")
@@ -206,7 +275,7 @@ class Attachment(BaseModel):
                     text = content_bytes.decode('utf-8')
                     self.attributes.update({
                         "type": "text",
-                        "text": text[:500],  # First 500 chars as preview
+                        "text": text,
                         "mime_type": self.mime_type
                     })
                 except UnicodeDecodeError:
@@ -217,7 +286,7 @@ class Attachment(BaseModel):
                             text = content_bytes.decode(encoding)
                             self.attributes.update({
                                 "type": "text",
-                                "text": text[:500],
+                                "text": text,
                                 "encoding": encoding,
                                 "mime_type": self.mime_type
                             })
@@ -276,6 +345,10 @@ class Attachment(BaseModel):
                 # Add storage info to attributes
                 self.attributes["storage_path"] = self.storage_path
                 self.update_attributes_with_url()
+                
+                # Clear content after successful storage
+                self.content = None
+                logger.debug(f"Cleared content after successful storage for {self.filename}")
                 
                 logger.debug(f"Successfully processed and stored attachment {self.filename}")
                 
