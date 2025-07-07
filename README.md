@@ -316,13 +316,39 @@ NARRATOR_FILE_STORAGE_PATH=/path/to/files
 - `status`: Processing status (pending, stored, failed)
 - `attributes`: Processed content and metadata
 
+## Development
+
+### Running Tests
+
+To run the test suite locally:
+
+```bash
+# Install development dependencies
+uv sync --extra dev
+
+# Run tests with coverage
+uv run pytest tests/ --cov=narrator --cov-report=term-missing --cov-branch --cov-report=term --no-cov-on-fail -v
+
+# Run tests without coverage (faster)
+uv run pytest tests/ -v
+```
+
+### Test Requirements
+
+The test suite requires:
+- Python 3.12+
+- pytest with async support
+- Test coverage reporting
+- System dependencies (libmagic for file type detection)
+
 ## Contributing
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
 4. Add tests
-5. Submit a pull request
+5. Run the test suite to ensure everything works
+6. Submit a pull request
 
 ## License
 
