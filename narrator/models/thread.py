@@ -67,11 +67,17 @@ class Thread(BaseModel):
             "platforms": self.platforms
         }
     
-    def add_message(self, message: Message) -> None:
-        """Add a new message to the thread and update analytics"""
+    def add_message(self, message: Message, same_turn: bool = False) -> None:
+        """Add a new message to the thread and update analytics
+        
+        Args:
+            message: The message to add
+            same_turn: If True, assign the same turn as the last message (for grouping related messages)
+        """
         # Set message sequence - system messages always get 0, others get next available number starting at 1
         if message.role == "system":
             message.sequence = 0
+            message.turn = 0  # System messages always get turn 0
             # Insert at beginning to maintain system message first
             self.messages.insert(0, message)
         else:
@@ -79,6 +85,51 @@ class Thread(BaseModel):
             max_sequence = max((m.sequence for m in self.messages if m.role != "system"), default=0)
             message.sequence = max_sequence + 1
             self.messages.append(message)
+        
+        # Handle turn assignment for non-system messages
+        if message.role != "system":
+            if same_turn and self.messages and len(self.messages) > 1:
+                # Use same turn as last message (excluding the one we just added)
+                last_message = self.messages[-2]  # Get second-to-last since we just appended
+                if last_message.role != "system":
+                    message.turn = last_message.turn
+                else:
+                    # If last message was system, get next turn
+                    max_turn = max((m.turn for m in self.messages if m.turn is not None and m.role != "system"), default=0)
+                    message.turn = max_turn + 1
+            else:
+                # Get next turn number
+                max_turn = max((m.turn for m in self.messages if m.turn is not None and m.role != "system"), default=0)
+                message.turn = max_turn + 1
+        
+        self.updated_at = datetime.now(UTC)
+
+    def add_messages_batch(self, messages: List[Message]) -> None:
+        """Add multiple messages as a batch (all get the same turn number)
+        
+        Args:
+            messages: List of messages to add as a group
+        """
+        if not messages:
+            return
+        
+        # Get the next turn number for all messages in the batch
+        max_turn = max((m.turn for m in self.messages if m.turn is not None and m.role != "system"), default=0)
+        batch_turn = max_turn + 1
+        
+        # Add each message with the same turn number
+        for i, message in enumerate(messages):
+            if message.role == "system":
+                # System messages handled separately
+                message.sequence = 0
+                message.turn = 0
+                self.messages.insert(0, message)
+            else:
+                # Set sequence and turn for non-system messages
+                max_sequence = max((m.sequence for m in self.messages if m.role != "system"), default=0)
+                message.sequence = max_sequence + 1
+                message.turn = batch_turn
+                self.messages.append(message)
         
         self.updated_at = datetime.now(UTC)
 
@@ -289,6 +340,67 @@ class Thread(BaseModel):
     def get_messages_in_sequence(self) -> List[Message]:
         """Get messages sorted by sequence number"""
         return sorted(self.messages, key=lambda m: m.sequence if m.sequence is not None else float('inf'))
+
+    def get_messages_by_turn(self, turn: int) -> List[Message]:
+        """Get all messages in a specific turn
+        
+        Args:
+            turn: The turn number to retrieve messages for
+            
+        Returns:
+            List of messages in the specified turn, sorted by sequence
+        """
+        turn_messages = [m for m in self.messages if m.turn == turn]
+        return sorted(turn_messages, key=lambda m: m.sequence if m.sequence is not None else float('inf'))
+
+    def get_current_turn(self) -> int:
+        """Get the current turn number (highest turn number in the thread)
+        
+        Returns:
+            Current turn number, or 0 if no messages
+        """
+        if not self.messages:
+            return 0
+        
+        # Exclude system messages when determining current turn
+        non_system_messages = [m for m in self.messages if m.role != "system"]
+        if not non_system_messages:
+            return 0
+            
+        return max(m.turn for m in non_system_messages if m.turn is not None)
+
+    def get_turns_summary(self) -> Dict[int, Dict[str, Any]]:
+        """Get a summary of all turns in the thread
+        
+        Returns:
+            Dictionary mapping turn numbers to turn information
+        """
+        turns = {}
+        
+        for message in self.messages:
+            if message.turn is None or message.role == "system":
+                continue
+                
+            turn = message.turn
+            if turn not in turns:
+                turns[turn] = {
+                    "turn": turn,
+                    "message_count": 0,
+                    "roles": {},
+                    "first_message_time": message.timestamp,
+                    "last_message_time": message.timestamp
+                }
+            
+            turns[turn]["message_count"] += 1
+            turns[turn]["roles"][message.role] = turns[turn]["roles"].get(message.role, 0) + 1
+            
+            # Update timestamps
+            if message.timestamp < turns[turn]["first_message_time"]:
+                turns[turn]["first_message_time"] = message.timestamp
+            if message.timestamp > turns[turn]["last_message_time"]:
+                turns[turn]["last_message_time"] = message.timestamp
+        
+        return turns
 
     def get_message_by_id(self, message_id: str) -> Optional[Message]:
         """Return the message with the specified ID, or None if no message exists with that ID"""

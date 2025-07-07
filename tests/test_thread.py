@@ -579,4 +579,283 @@ def test_get_message_by_id():
     
     # Try to find non-existent message
     not_found = thread.get_message_by_id("nonexistent-id")
-    assert not_found is None 
+    assert not_found is None
+
+def test_message_turn_assignment():
+    """Test basic turn assignment for messages"""
+    thread = Thread(id="test-thread")
+    
+    # Add messages normally - each should get its own turn
+    thread.add_message(Message(role="user", content="Hello"))
+    thread.add_message(Message(role="assistant", content="Hi there"))
+    thread.add_message(Message(role="user", content="How are you?"))
+    
+    # Verify turn assignments
+    assert thread.messages[0].turn == 1
+    assert thread.messages[1].turn == 2
+    assert thread.messages[2].turn == 3
+    
+    # Verify current turn
+    assert thread.get_current_turn() == 3
+
+def test_same_turn_parameter():
+    """Test the same_turn parameter for grouping messages"""
+    thread = Thread(id="test-thread")
+    
+    # Add initial user message
+    thread.add_message(Message(role="user", content="What's 2+2?"))
+    assert thread.messages[0].turn == 1
+    
+    # Add multiple assistant responses for the same user question
+    thread.add_message(Message(role="assistant", content="GPT-4: The answer is 4"), same_turn=True)
+    thread.add_message(Message(role="assistant", content="Claude: 2+2 equals 4"), same_turn=True)
+    thread.add_message(Message(role="assistant", content="Gemini: It's 4"), same_turn=True)
+    
+    # All assistant responses should have the same turn as the user message
+    assert thread.messages[1].turn == 1
+    assert thread.messages[2].turn == 1
+    assert thread.messages[3].turn == 1
+    
+    # Current turn should still be 1
+    assert thread.get_current_turn() == 1
+    
+    # Add next user message - should start new turn
+    thread.add_message(Message(role="user", content="Thanks!"))
+    assert thread.messages[4].turn == 2
+    assert thread.get_current_turn() == 2
+
+def test_add_messages_batch():
+    """Test adding multiple messages as a batch"""
+    thread = Thread(id="test-thread")
+    
+    # Add initial message
+    thread.add_message(Message(role="user", content="Process multiple tools"))
+    assert thread.messages[0].turn == 1
+    
+    # Add batch of messages
+    batch_messages = [
+        Message(role="assistant", content="I'll use multiple tools"),
+        Message(role="tool", content="Weather: 72°F", tool_call_id="call_weather"),
+        Message(role="tool", content="News: No major events", tool_call_id="call_news"),
+        Message(role="assistant", content="Based on the tools: It's 72°F and no major news")
+    ]
+    
+    thread.add_messages_batch(batch_messages)
+    
+    # All batch messages should have the same turn (turn 2)
+    assert thread.messages[1].turn == 2
+    assert thread.messages[2].turn == 2
+    assert thread.messages[3].turn == 2
+    assert thread.messages[4].turn == 2
+    
+    # Verify sequences are still incremental
+    assert thread.messages[1].sequence == 2
+    assert thread.messages[2].sequence == 3
+    assert thread.messages[3].sequence == 4
+    assert thread.messages[4].sequence == 5
+    
+    assert thread.get_current_turn() == 2
+
+def test_get_messages_by_turn():
+    """Test retrieving messages by turn number"""
+    thread = Thread(id="test-thread")
+    
+    # Add messages in different turns
+    thread.add_message(Message(role="user", content="Question 1"))  # turn 1
+    thread.add_message(Message(role="assistant", content="Answer 1a"), same_turn=True)  # turn 1
+    thread.add_message(Message(role="assistant", content="Answer 1b"), same_turn=True)  # turn 1
+    thread.add_message(Message(role="user", content="Question 2"))  # turn 2
+    thread.add_message(Message(role="assistant", content="Answer 2"))  # turn 3
+    
+    # Test getting messages from turn 1
+    turn1_messages = thread.get_messages_by_turn(1)
+    assert len(turn1_messages) == 3
+    assert turn1_messages[0].content == "Question 1"
+    assert turn1_messages[1].content == "Answer 1a"
+    assert turn1_messages[2].content == "Answer 1b"
+    
+    # Test getting messages from turn 2
+    turn2_messages = thread.get_messages_by_turn(2)
+    assert len(turn2_messages) == 1
+    assert turn2_messages[0].content == "Question 2"
+    
+    # Test getting messages from turn 3
+    turn3_messages = thread.get_messages_by_turn(3)
+    assert len(turn3_messages) == 1
+    assert turn3_messages[0].content == "Answer 2"
+    
+    # Test non-existent turn
+    empty_turn = thread.get_messages_by_turn(99)
+    assert len(empty_turn) == 0
+
+def test_get_current_turn():
+    """Test getting the current turn number"""
+    thread = Thread(id="test-thread")
+    
+    # Empty thread should have turn 0
+    assert thread.get_current_turn() == 0
+    
+    # Add system message (turn 0)
+    thread.add_message(Message(role="system", content="System prompt"))
+    assert thread.get_current_turn() == 0  # System messages don't count
+    
+    # Add first user message
+    thread.add_message(Message(role="user", content="Hello"))
+    assert thread.get_current_turn() == 1
+    
+    # Add assistant response in same turn
+    thread.add_message(Message(role="assistant", content="Hi"), same_turn=True)
+    assert thread.get_current_turn() == 1  # Still turn 1
+    
+    # Add next message in new turn
+    thread.add_message(Message(role="user", content="How are you?"))
+    assert thread.get_current_turn() == 2
+
+def test_get_turns_summary():
+    """Test getting summary of all turns"""
+    thread = Thread(id="test-thread")
+    
+    # Add system message (shouldn't appear in summary)
+    thread.add_message(Message(role="system", content="System"))
+    
+    # Add messages in different turns with some timestamps
+    base_time = datetime.now(UTC)
+    thread.add_message(Message(role="user", content="Q1", timestamp=base_time))
+    thread.add_message(Message(role="assistant", content="A1a"), same_turn=True)  # Same turn
+    thread.add_message(Message(role="assistant", content="A1b"), same_turn=True)  # Same turn
+    
+    # Add second turn
+    thread.add_message(Message(role="user", content="Q2", timestamp=base_time + timedelta(minutes=1)))
+    thread.add_message(Message(role="assistant", content="A2"))
+    
+    summary = thread.get_turns_summary()
+    
+    # Should have 3 turns (1, 2, 3) - system messages excluded
+    assert len(summary) == 3
+    
+    # Check turn 1 summary
+    assert 1 in summary
+    turn1 = summary[1]
+    assert turn1["turn"] == 1
+    assert turn1["message_count"] == 3  # user + 2 assistants
+    assert turn1["roles"]["user"] == 1
+    assert turn1["roles"]["assistant"] == 2
+    
+    # Check turn 2 summary
+    assert 2 in summary
+    turn2 = summary[2]
+    assert turn2["turn"] == 2
+    assert turn2["message_count"] == 1
+    assert turn2["roles"]["user"] == 1
+    
+    # Check turn 3 summary
+    assert 3 in summary
+    turn3 = summary[3]
+    assert turn3["turn"] == 3
+    assert turn3["message_count"] == 1
+    assert turn3["roles"]["assistant"] == 1
+
+def test_system_message_turn_assignment():
+    """Test that system messages get turn 0"""
+    thread = Thread(id="test-thread")
+    
+    # Add regular messages first
+    thread.add_message(Message(role="user", content="Hello"))
+    thread.add_message(Message(role="assistant", content="Hi"))
+    
+    # Add system message
+    thread.add_message(Message(role="system", content="You are helpful"))
+    
+    # Verify system message has turn 0 and sequence 0
+    system_msg = thread.get_system_message()
+    assert system_msg is not None
+    assert system_msg.turn == 0
+    assert system_msg.sequence == 0
+    
+    # Verify system message is first in the list
+    assert thread.messages[0].role == "system"
+    assert thread.messages[0].turn == 0
+
+@pytest.mark.asyncio
+async def test_turn_serialization():
+    """Test that turn field is included in serialization"""
+    thread = Thread(id="test-thread")
+    
+    # Add messages with turns
+    thread.add_message(Message(role="user", content="Hello"))
+    thread.add_message(Message(role="assistant", content="Hi"), same_turn=True)
+    
+    # Test thread serialization includes turn data
+    thread_data = thread.model_dump(mode="json")
+    assert len(thread_data["messages"]) == 2
+    assert thread_data["messages"][0]["turn"] == 1
+    assert thread_data["messages"][1]["turn"] == 1
+    
+    # Test message serialization
+    msg_data = thread.messages[0].model_dump(mode="json")
+    assert msg_data["turn"] == 1
+    
+    # Test chat completion format excludes turn (LLM APIs don't need it)
+    chat_messages = await thread.get_messages_for_chat_completion()
+    assert len(chat_messages) == 2
+    assert "turn" not in chat_messages[0]  # Should not include turn field
+    assert "sequence" in chat_messages[0]  # Should still include sequence
+
+def test_turn_with_empty_thread():
+    """Test turn functionality with empty thread"""
+    thread = Thread(id="test-thread")
+    
+    # Empty thread tests
+    assert thread.get_current_turn() == 0
+    assert thread.get_messages_by_turn(1) == []
+    assert thread.get_turns_summary() == {}
+
+def test_mixed_turn_scenarios():
+    """Test complex mixed scenarios with turns"""
+    thread = Thread(id="test-thread")
+    
+    # Add system message
+    thread.add_message(Message(role="system", content="System"))
+    
+    # Turn 1: User question with multiple responses
+    thread.add_message(Message(role="user", content="What's the weather?"))
+    thread.add_message(Message(role="assistant", content="Checking..."), same_turn=True)
+    thread.add_message(Message(role="assistant", content="It's sunny"), same_turn=True)
+    
+    # Turn 2: Batch of tool operations
+    batch = [
+        Message(role="assistant", content="Let me get more data"),
+        Message(role="tool", content="API result", tool_call_id="call_1"),
+        Message(role="assistant", content="Based on API: Updated weather info")
+    ]
+    thread.add_messages_batch(batch)
+    
+    # Turn 3: Final user response
+    thread.add_message(Message(role="user", content="Thanks!"))
+    
+    # Verify turn structure
+    assert thread.get_current_turn() == 3
+    
+    # Turn 1 should have 3 messages (user + 2 assistants)
+    turn1 = thread.get_messages_by_turn(1)
+    assert len(turn1) == 3
+    assert turn1[0].role == "user"
+    assert turn1[1].role == "assistant"
+    assert turn1[2].role == "assistant"
+    
+    # Turn 2 should have 3 messages (assistant + tool + assistant)
+    turn2 = thread.get_messages_by_turn(2)
+    assert len(turn2) == 3
+    assert turn2[0].role == "assistant"
+    assert turn2[1].role == "tool"
+    assert turn2[2].role == "assistant"
+    
+    # Turn 3 should have 1 message (user)
+    turn3 = thread.get_messages_by_turn(3)
+    assert len(turn3) == 1
+    assert turn3[0].role == "user"
+    
+    # Verify sequences are still correct
+    all_messages = [m for m in thread.messages if m.role != "system"]
+    sequences = [m.sequence for m in all_messages]
+    assert sequences == [1, 2, 3, 4, 5, 6, 7]  # Should be sequential 

@@ -52,6 +52,7 @@ class MessageRecord(Base):
     id = Column(String, primary_key=True)
     thread_id = Column(String, ForeignKey('threads.id', ondelete='CASCADE'), nullable=False)
     sequence = Column(Integer, nullable=False)
+    turn = Column(Integer, nullable=True)
     role = Column(String, nullable=False)
     content = Column(Text, nullable=True)
     name = Column(String, nullable=True)
