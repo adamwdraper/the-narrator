@@ -610,4 +610,132 @@ async def test_reaction_persistence():
     assert "user1" in reactions[":thumbsup:"]
     assert "user2" in reactions[":heart:"]
     
-    await thread_store._backend.engine.dispose() 
+    await thread_store._backend.engine.dispose()
+
+@pytest.mark.asyncio 
+async def test_turn_data_persistence():
+    """Test that turn data is properly persisted to and retrieved from database"""
+    store = await ThreadStore.create(":memory:")
+    thread = Thread(title="Turn Persistence Test")
+    
+    # Add messages with various turn configurations
+    thread.add_message(Message(role="user", content="Question 1"))  # turn 1
+    thread.add_message(Message(role="assistant", content="Answer 1a"), same_turn=True)  # turn 1
+    thread.add_message(Message(role="assistant", content="Answer 1b"), same_turn=True)  # turn 1
+    
+    # Add batch messages
+    batch = [
+        Message(role="assistant", content="Processing..."),
+        Message(role="tool", content="Tool result", tool_call_id="call_1"),
+        Message(role="assistant", content="Complete")
+    ]
+    thread.add_messages_batch(batch)  # turn 2
+    
+    # Add system message
+    thread.add_message(Message(role="system", content="System prompt"))  # turn 0
+    
+    # Save to database
+    await store.save(thread)
+    
+    # Retrieve from database
+    retrieved = await store.get(thread.id)
+    assert retrieved is not None
+    
+    # Verify turn data is preserved (system messages not persisted)
+    assert len(retrieved.messages) == 6  # 6 non-system messages
+    
+    # Find messages by content and verify turns
+    user_msg = next(m for m in retrieved.messages if m.content == "Question 1")
+    assert user_msg.turn == 1
+    
+    answer_1a = next(m for m in retrieved.messages if m.content == "Answer 1a")
+    assert answer_1a.turn == 1
+    
+    answer_1b = next(m for m in retrieved.messages if m.content == "Answer 1b")
+    assert answer_1b.turn == 1
+    
+    processing_msg = next(m for m in retrieved.messages if m.content == "Processing...")
+    assert processing_msg.turn == 2
+    
+    tool_msg = next(m for m in retrieved.messages if m.content == "Tool result")
+    assert tool_msg.turn == 2
+    
+    complete_msg = next(m for m in retrieved.messages if m.content == "Complete")
+    assert complete_msg.turn == 2
+    
+    # Verify turn helper methods work after retrieval
+    assert retrieved.get_current_turn() == 2
+    assert len(retrieved.get_messages_by_turn(1)) == 3
+    assert len(retrieved.get_messages_by_turn(2)) == 3
+    
+    # Verify turns summary
+    summary = retrieved.get_turns_summary()
+    assert 1 in summary
+    assert 2 in summary
+    assert summary[1]["message_count"] == 3
+    assert summary[2]["message_count"] == 3
+    
+    await store._backend.engine.dispose()
+
+@pytest.mark.asyncio
+async def test_turn_data_with_complex_scenarios():
+    """Test turn functionality in complex real-world scenarios"""
+    store = await ThreadStore.create(":memory:")
+    thread = Thread(title="Complex Turn Test")
+    
+    # System message (not persisted but should handle turn 0)
+    thread.add_message(Message(role="system", content="You are helpful"))
+    
+    # Multi-LLM scenario: same user question, multiple responses
+    thread.add_message(Message(role="user", content="What's 2+2?"))
+    thread.add_message(Message(role="assistant", content="GPT-4: It's 4", 
+                              source={"id": "gpt-4", "type": "agent"}), same_turn=True)
+    thread.add_message(Message(role="assistant", content="Claude: 2+2=4", 
+                              source={"id": "claude", "type": "agent"}), same_turn=True)
+    
+    # Tool execution scenario: batch processing
+    tool_batch = [
+        Message(role="assistant", content="Let me check multiple sources"),
+        Message(role="tool", content="Weather: Sunny", tool_call_id="weather_call"),
+        Message(role="tool", content="News: All clear", tool_call_id="news_call"),
+        Message(role="assistant", content="Weather is sunny, no major news")
+    ]
+    thread.add_messages_batch(tool_batch)
+    
+    # Final user response
+    thread.add_message(Message(role="user", content="Thanks for the info!"))
+    
+    # Save and retrieve
+    await store.save(thread)
+    retrieved = await store.get(thread.id)
+    
+    # Verify complex turn structure
+    assert retrieved.get_current_turn() == 3
+    
+    # Turn 1: user + 2 assistant responses
+    turn1_msgs = retrieved.get_messages_by_turn(1)
+    assert len(turn1_msgs) == 3
+    assert turn1_msgs[0].role == "user"
+    assert turn1_msgs[1].role == "assistant"
+    assert turn1_msgs[2].role == "assistant"
+    
+    # Turn 2: tool execution batch
+    turn2_msgs = retrieved.get_messages_by_turn(2)
+    assert len(turn2_msgs) == 4
+    assert turn2_msgs[0].role == "assistant"
+    assert turn2_msgs[1].role == "tool"
+    assert turn2_msgs[2].role == "tool"
+    assert turn2_msgs[3].role == "assistant"
+    
+    # Turn 3: final user message
+    turn3_msgs = retrieved.get_messages_by_turn(3)
+    assert len(turn3_msgs) == 1
+    assert turn3_msgs[0].role == "user"
+    assert turn3_msgs[0].content == "Thanks for the info!"
+    
+    # Verify source data preserved with turns
+    gpt_msg = next(m for m in turn1_msgs if "GPT-4" in m.content)
+    assert gpt_msg.source["id"] == "gpt-4"
+    assert gpt_msg.turn == 1
+    
+    await store._backend.engine.dispose() 

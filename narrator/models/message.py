@@ -37,6 +37,10 @@ class Message(BaseModel):
         default=None,
         description="Message sequence number within thread. System messages get lowest sequences."
     )
+    turn: Optional[int] = Field(
+        default=None,
+        description="Turn number grouping related messages in the same conversational step."
+    )
     content: Optional[Union[str, List[Union[TextContent, ImageContent]]]] = None
     name: Optional[str] = None
     tool_call_id: Optional[str] = None  # Required for tool messages
@@ -141,6 +145,7 @@ class Message(BaseModel):
             hash_content = {
                 "role": self.role,
                 "sequence": self.sequence,  # Include sequence in hash
+                "turn": self.turn,  # Include turn in hash
                 "content": self.content,
                 "timestamp": self.timestamp.isoformat()
             }
@@ -218,6 +223,7 @@ class Message(BaseModel):
             "id": self.id,
             "role": self.role,
             "sequence": self.sequence,  # Include sequence in serialization
+            "turn": self.turn,  # Include turn in serialization
             "content": self.content,
             "timestamp": self.timestamp.isoformat() if mode == "json" else self.timestamp,
             "source": self.source,
@@ -415,6 +421,7 @@ class Message(BaseModel):
                     "id": "123e4567-e89b-12d3-a456-426614174000",
                     "role": "user",
                     "sequence": 1,
+                    "turn": 1,
                     "content": "Here are some files to look at",
                     "name": None,
                     "tool_call_id": None,

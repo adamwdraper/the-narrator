@@ -9,7 +9,7 @@ The Narrator provides robust, production-ready storage solutions for conversatio
 - **ThreadStore**: Persistent storage for conversation threads with support for both in-memory and SQL backends
 - **FileStore**: Secure file storage with automatic processing for various file types
 - **Models**: Pydantic models for threads, messages, and attachments
-- **Registry**: Component registry for managing shared storage instances
+- **CLI Tools**: Command-line interface for database management and setup
 
 ## Features
 
@@ -31,6 +31,57 @@ The Narrator provides robust, production-ready storage solutions for conversatio
 
 ```bash
 pip install the-narrator
+```
+
+## Setup
+
+### Database Setup
+
+For production use with PostgreSQL or SQLite persistence, you'll need to initialize the database tables:
+
+```bash
+# Initialize database tables (PostgreSQL)
+narrator-db init --database-url "postgresql+asyncpg://user:password@localhost/dbname"
+
+# Initialize database tables (SQLite)
+narrator-db init --database-url "sqlite+aiosqlite:///path/to/your/database.db"
+
+# Check database status
+narrator-db status --database-url "postgresql+asyncpg://user:password@localhost/dbname"
+```
+
+You can also use environment variables instead of passing the database URL:
+
+```bash
+# Set environment variable
+export NARRATOR_DATABASE_URL="postgresql+asyncpg://user:password@localhost/dbname"
+
+# Then run without --database-url flag
+narrator-db init
+narrator-db status
+```
+
+### Environment Variables
+
+Configure the narrator using environment variables:
+
+```bash
+# Database settings
+NARRATOR_DATABASE_URL="postgresql+asyncpg://user:password@localhost/dbname"
+NARRATOR_DB_POOL_SIZE=5              # Connection pool size
+NARRATOR_DB_MAX_OVERFLOW=10          # Max additional connections
+NARRATOR_DB_POOL_TIMEOUT=30          # Connection timeout (seconds)
+NARRATOR_DB_POOL_RECYCLE=300         # Connection recycle time (seconds)
+NARRATOR_DB_ECHO=false               # Enable SQL logging
+
+# File storage settings
+NARRATOR_FILE_STORAGE_PATH=/path/to/files  # Storage directory
+NARRATOR_MAX_FILE_SIZE=52428800            # 50MB max file size
+NARRATOR_MAX_STORAGE_SIZE=5368709120       # 5GB max total storage
+NARRATOR_ALLOWED_MIME_TYPES=image/jpeg,application/pdf  # Allowed file types
+
+# Logging
+NARRATOR_LOG_LEVEL=INFO              # Log level
 ```
 
 ## Quick Start
@@ -109,56 +160,117 @@ asyncio.run(main())
 
 ## Configuration
 
-### Environment Variables
+### Database Configuration
 
-The Narrator can be configured using environment variables:
+The Narrator supports multiple database backends:
 
-#### Database Configuration
-```bash
-# Database settings
-NARRATOR_DB_POOL_SIZE=5              # Connection pool size
-NARRATOR_DB_MAX_OVERFLOW=10          # Max additional connections
-NARRATOR_DB_POOL_TIMEOUT=30          # Connection timeout (seconds)
-NARRATOR_DB_POOL_RECYCLE=300         # Connection recycle time (seconds)
-NARRATOR_DB_ECHO=false               # Enable SQL logging
+#### Memory storage (Default)
+```python
+from narrator import ThreadStore
 
-# Logging
-NARRATOR_LOG_LEVEL=INFO              # Log level
+# Use factory pattern for immediate connection validation
+store = await ThreadStore.create()  # Uses memory backend
+
+# Thread operations are immediate
+thread = Thread()
+await store.save(thread)
 ```
 
-#### File Storage Configuration
-```bash
-# File storage settings
-NARRATOR_FILE_STORAGE_PATH=/path/to/files  # Storage directory
-NARRATOR_MAX_FILE_SIZE=52428800            # 50MB max file size
-NARRATOR_MAX_STORAGE_SIZE=5368709120       # 5GB max total storage
-NARRATOR_ALLOWED_MIME_TYPES=image/jpeg,application/pdf  # Allowed file types
+Key characteristics:
+- Fastest possible performance (direct dictionary access)
+- No persistence (data is lost when program exits)
+- No setup required (works out of the box)
+- Perfect for scripts and one-off conversations
+- Great for testing and development
+
+#### PostgreSQL storage
+```python
+from narrator import ThreadStore
+
+# Use factory pattern for immediate connection validation
+db_url = "postgresql+asyncpg://user:pass@localhost/dbname"
+try:
+    store = await ThreadStore.create(db_url)
+    print("Connected to database successfully")
+except Exception as e:
+    print(f"Database connection failed: {e}")
+    # Handle connection failure appropriately
+
+# Must save threads and changes to persist
+thread = Thread()
+await store.save(thread)  # Required
+thread.add_message(message)
+await store.save(thread)  # Save changes
+
+# Always use thread.id with database storage
+result = await store.get(thread.id)
+```
+
+Key characteristics:
+- Async operations for non-blocking I/O
+- Persistent storage (data survives program restarts)
+- Cross-session support (can access threads from different processes)
+- Production-ready
+- Automatic schema management through SQLAlchemy
+- Connection validation at startup with factory pattern
+
+#### SQLite storage
+```python
+from narrator import ThreadStore
+
+# Use factory pattern for immediate connection validation
+db_url = "sqlite+aiosqlite:///path/to/db.sqlite"
+store = await ThreadStore.create(db_url)
+
+# Or use in-memory SQLite database
+store = await ThreadStore.create("sqlite+aiosqlite://")  # In-memory SQLite
+```
+
+### File Storage Configuration
+
+```python
+from narrator import FileStore
+
+# Create a FileStore instance with factory pattern
+file_store = await FileStore.create(
+    base_path="/path/to/files",  # Optional custom path
+    max_file_size=100 * 1024 * 1024,  # 100MB (optional)
+    max_storage_size=10 * 1024 * 1024 * 1024  # 10GB (optional)
+)
+
+# Or use default settings from environment variables
+file_store = await FileStore.create()
 ```
 
 ## Advanced Usage
 
-### Component Registry
-
-The registry allows you to manage shared storage instances across your application:
+### Using ThreadStore and FileStore Together
 
 ```python
 import asyncio
-from narrator import ThreadStore, FileStore
-from narrator.utils.registry import register_thread_store, register_file_store, get_thread_store
+from narrator import ThreadStore, FileStore, Thread, Message
 
 async def main():
-    # Create and register stores
+    # Create stores
     thread_store = await ThreadStore.create("sqlite+aiosqlite:///main.db")
     file_store = await FileStore.create("/path/to/files")
     
-    register_thread_store("main", thread_store)
-    register_file_store("main", file_store)
+    # Create a thread with file attachment
+    thread = Thread(title="Document Discussion")
     
-    # Retrieve stores from anywhere in your application
-    store = get_thread_store("main")
-    if store:
-        threads = await store.list_recent(limit=10)
-        print(f"Found {len(threads)} recent threads")
+    # Create a message with an attachment
+    message = Message(role="user", content="Here's a document")
+    
+    # Add file content
+    pdf_content = b"..."  # Your PDF content
+    message.add_attachment(pdf_content, filename="document.pdf")
+    
+    thread.add_message(message)
+    
+    # Save thread (attachments are processed automatically)
+    await thread_store.save(thread)
+    
+    print(f"Thread saved with ID: {thread.id}")
 
 asyncio.run(main())
 ```
@@ -231,11 +343,22 @@ The Narrator includes a CLI tool for database management:
 
 ```bash
 # Initialize database tables
-narrator-db init --database-url "postgresql://user:pass@localhost/dbname"
+narrator-db init --database-url "postgresql+asyncpg://user:pass@localhost/dbname"
+
+# Initialize using environment variable
+export NARRATOR_DATABASE_URL="postgresql+asyncpg://user:pass@localhost/dbname"
+narrator-db init
 
 # Check database status
-narrator-db status --database-url "postgresql://user:pass@localhost/dbname"
+narrator-db status --database-url "postgresql+asyncpg://user:pass@localhost/dbname"
+
+# Check status using environment variable
+narrator-db status
 ```
+
+Available commands:
+- `narrator-db init` - Initialize database tables
+- `narrator-db status` - Check database connection and basic statistics
 
 ## Migration from Tyler
 
@@ -243,25 +366,37 @@ If you're migrating from the original Tyler package:
 
 1. **Update imports**:
    ```python
-# Before
-from tyler import ThreadStore, FileStore, Thread, Message
+   # Before
+   from tyler import ThreadStore, FileStore, Thread, Message
 
-# After
-from narrator import ThreadStore, FileStore, Thread, Message
-```
+   # After
+   from narrator import ThreadStore, FileStore, Thread, Message
+   ```
 
 2. **Update environment variables**:
    ```bash
-# Before
-TYLER_DB_POOL_SIZE=5
-TYLER_FILE_STORAGE_PATH=/path/to/files
+   # Before
+   TYLER_DB_POOL_SIZE=5
+   TYLER_FILE_STORAGE_PATH=/path/to/files
 
-# After
-NARRATOR_DB_POOL_SIZE=5
-NARRATOR_FILE_STORAGE_PATH=/path/to/files
-```
+   # After
+   NARRATOR_DB_POOL_SIZE=5
+   NARRATOR_FILE_STORAGE_PATH=/path/to/files
+   ```
 
-3. **Database compatibility**: The database schema is fully compatible, so existing data will work without changes.
+3. **Remove registry usage**:
+   ```python
+   # Before (with registry)
+   from tyler.utils.registry import register_thread_store, get_thread_store
+   register_thread_store("default", store)
+   store = get_thread_store("default")
+
+   # After (direct usage)
+   store = await ThreadStore.create("your-database-url")
+   # Use store directly
+   ```
+
+4. **Database compatibility**: The database schema is fully compatible, so existing data will work without changes.
 
 ## API Reference
 
